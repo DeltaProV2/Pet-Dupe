@@ -1,345 +1,717 @@
---// Pet Spawner LocalScript
+task.spawn(
+    function()
+        local load = require(game.ReplicatedStorage:WaitForChild("Fsys")).load
 
-local Players = game:GetService("Players")
-local Player = Players.LocalPlayer
-local Mouse = Player:GetMouse()
-local TweenService = game:GetService("TweenService")
+        set_thread_identity(2)
+        local clientData = load("ClientData")
+        local items = load("KindDB")
+        local router = load("RouterClient")
+        local downloader = load("DownloadClient")
+        local animationManager = load("AnimationManager")
+        local petRigs = load("new:PetRigs")
+        set_thread_identity(8)
 
--- Create ScreenGui
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "PetSpawnerGui"
-ScreenGui.Parent = Player:WaitForChild("PlayerGui")
+        local petModels = {}
+        local pets = {}
+        local equippedPet = nil
+        local mountedPet = nil
+        local currentMountTrack = nil
 
--- Create Main Frame
-local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 300, 0, 180)
-MainFrame.Position = UDim2.new(0.5, -150, 0.5, -90)
-MainFrame.BackgroundColor3 = Color3.fromRGB(255, 150, 200) -- light pink
-MainFrame.BorderSizePixel = 0
-MainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
-MainFrame.Parent = ScreenGui
+        local function updateData(key, action)
+            local data = clientData.get(key)
+            local clonedData = table.clone(data)
+            clientData.predict(key, action(clonedData))
+        end
 
--- Gradient Background
-local UIGradient = Instance.new("UIGradient")
-UIGradient.Color = ColorSequence.new({
-	ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 180, 220)),
-	ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 140, 210))
-})
-UIGradient.Rotation = 90
-UIGradient.Parent = MainFrame
+        local function getUniqueId()
+            local HttpService = game:GetService("HttpService")
+            return HttpService:GenerateGUID(false)
+        end
 
--- Neon Animated Border
-local Stroke = Instance.new("UIStroke")
-Stroke.Thickness = 3
-Stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-Stroke.Color = Color3.fromRGB(255, 0, 200)
-Stroke.Parent = MainFrame
+        local function getPetModel(kind)
+            if petModels[kind] then
+                return petModels[kind]
+            end
+            local streamed = downloader.promise_download_copy("Pets", kind):expect()
+            petModels[kind] = streamed
+            return streamed
+        end
 
-local neonColors = {
-	Color3.fromRGB(255, 0, 200),   -- Pink
-	Color3.fromRGB(0, 220, 255),   -- Cyan
-	Color3.fromRGB(180, 0, 255),   -- Purple
-	Color3.fromRGB(255, 120, 0),   -- Orange
-}
+        local function createPet(id, properties)
+            local uniqueId = getUniqueId()
+            local pet = nil
 
-task.spawn(function()
-	while true do
-		for _, neonColor in ipairs(neonColors) do
-			local tween = TweenService:Create(
-				Stroke,
-				TweenInfo.new(1.5, Enum.EasingStyle.Linear),
-				{ Color = neonColor }
-			)
-			tween:Play()
-			tween.Completed:Wait()
-		end
-	end
-end)
+            set_thread_identity(2)
+            updateData(
+                "inventory",
+                function(inventory)
+                    local newPets = table.clone(inventory.pets)
+                    local item = items[id]
+                    pet = {
+                        unique = uniqueId,
+                        category = "pets",
+                        id = id,
+                        kind = item.kind,
+                        newness_order = 0,
+                        properties = properties
+                    }
+                    newPets[uniqueId] = pet
+                    inventory.pets = newPets
+                    return inventory
+                end
+            )
 
--- Add UICorner
-local UICorner = Instance.new("UICorner")
-UICorner.CornerRadius = UDim.new(0, 10)
-UICorner.Parent = MainFrame
+            set_thread_identity(8)
+            pets[uniqueId] = {data = pet, model = nil}
+            return pet
+        end
 
--- Title
-local Title = Instance.new("TextLabel")
-Title.Size = UDim2.new(1, 0, 0, 30)
-Title.BackgroundTransparency = 1
-Title.Text = "amina pets nyo"
-Title.TextColor3 = Color3.fromRGB(255, 255, 255)
-Title.Font = Enum.Font.SourceSansBold
-Title.TextSize = 20
--- Title Frame (darker see-through black background)
-local TitleFrame = Instance.new("Frame")
-TitleFrame.Size = UDim2.new(1, -20, 0, 35)
-TitleFrame.Position = UDim2.new(0, 10, 0, 5)
-TitleFrame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-TitleFrame.BackgroundTransparency = 0.1 -- darker (0 = solid black, 1 = invisible)
-TitleFrame.BorderSizePixel = 0
-TitleFrame.Parent = MainFrame
+        local function neonify(model, entry)
+            local petModel = model:FindFirstChild("PetModel")
+            if not petModel then
+                return
+            end
+            for neonPart, configuration in pairs(entry.neon_parts) do
+                local trueNeonPart = petRigs.get(petModel).get_geo_part(petModel, neonPart)
+                trueNeonPart.Material = configuration.Material
+                trueNeonPart.Color = configuration.Color
+            end
+        end
 
-local TitleFrameCorner = Instance.new("UICorner")
-TitleFrameCorner.CornerRadius = UDim.new(0, 8)
-TitleFrameCorner.Parent = TitleFrame
+        local function addPetWrapper(wrapper)
+            updateData(
+                "pet_char_wrappers",
+                function(petWrappers)
+                    wrapper.unique = #petWrappers + 1
+                    wrapper.index = #petWrappers + 1
+                    petWrappers[#petWrappers + 1] = wrapper
+                    return petWrappers
+                end
+            )
+        end
 
--- Title Text
-local Title = Instance.new("TextLabel")
-Title.Size = UDim2.new(1, 0, 1, 0)
-Title.BackgroundTransparency = 1
-Title.Text = "amina pets nyo"
-Title.TextColor3 = Color3.fromRGB(255, 255, 255)
-Title.Font = Enum.Font.SourceSansBold
-Title.TextSize = 20
-Title.Parent = TitleFrame
+        local function addPetState(state)
+            updateData(
+                "pet_state_managers",
+                function(petStates)
+                    petStates[#petStates + 1] = state
+                    return petStates
+                end
+            )
+        end
 
--- TextBox for Pet Name
-local PetNameBox = Instance.new("TextBox")
-PetNameBox.Size = UDim2.new(0.9, 0, 0, 30)
-PetNameBox.Position = UDim2.new(0.05, 0, 0, 50)
-PetNameBox.PlaceholderText = "Enter Pet Name"
-PetNameBox.Text = ""
-PetNameBox.ClearTextOnFocus = false
-PetNameBox.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
-PetNameBox.TextColor3 = Color3.fromRGB(255, 255, 255)
-PetNameBox.Font = Enum.Font.SourceSans
-PetNameBox.TextSize = 18
-PetNameBox.Parent = MainFrame
+        local function findIndex(array, finder)
+            for index, value in pairs(array) do
+                if finder(value, index) then
+                    return index
+                end
+            end
+            return nil
+        end
 
-local BoxCorner = Instance.new("UICorner")
-BoxCorner.CornerRadius = UDim.new(0, 5)
-BoxCorner.Parent = PetNameBox
+        local function removePetWrapper(uniqueId)
+            updateData(
+                "pet_char_wrappers",
+                function(petWrappers)
+                    local index =
+                        findIndex(
+                        petWrappers,
+                        function(wrapper)
+                            return wrapper.pet_unique == uniqueId
+                        end
+                    )
+                    if not index then
+                        return petWrappers
+                    end
+                    table.remove(petWrappers, index)
+                    for wrapperIndex, wrapper in pairs(petWrappers) do
+                        wrapper.unique = wrapperIndex
+                        wrapper.index = wrapperIndex
+                    end
+                    return petWrappers
+                end
+            )
+        end
 
--- Button creation helper
-local function CreateButton(name, color, posY)
-	local btn = Instance.new("TextButton")
-	btn.Size = UDim2.new(0.25, 0, 0, 30)
-	btn.Position = UDim2.new(posY, 0, 0, 90)
-	btn.BackgroundColor3 = color
-	btn.Text = name
-	btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-	btn.Font = Enum.Font.SourceSansBold
-	btn.TextSize = 18
-	btn.Parent = MainFrame
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0,5)
-	corner.Parent = btn
-	return btn
-end
+        local function clearPetState(uniqueId)
+            local pet = pets[uniqueId]
+            if not pet or not pet.model then
+                return
+            end
+            updateData(
+                "pet_state_managers",
+                function(states)
+                    local index =
+                        findIndex(
+                        states,
+                        function(state)
+                            return state.char == pet.model
+                        end
+                    )
+                    if not index then
+                        return states
+                    end
+                    local clonedStates = table.clone(states)
+                    clonedStates[index] = table.clone(clonedStates[index])
+                    clonedStates[index].states = {}
+                    return clonedStates
+                end
+            )
+        end
 
--- Rarity Buttons
-local MFRBtn = CreateButton("MFR", Color3.fromRGB(255, 100, 100), 0.05)
-local NFRBtn = CreateButton("NFR", Color3.fromRGB(100, 255, 100), 0.375)
-local FRBtn = CreateButton("FR", Color3.fromRGB(100, 100, 255), 0.7)
+        local function setPetState(uniqueId, id)
+            local pet = pets[uniqueId]
+            if not pet or not pet.model then
+                return
+            end
+            updateData(
+                "pet_state_managers",
+                function(states)
+                    local index =
+                        findIndex(
+                        states,
+                        function(state)
+                            return state.char == pet.model
+                        end
+                    )
+                    if not index then
+                        return states
+                    end
+                    local clonedStates = table.clone(states)
+                    clonedStates[index] = table.clone(clonedStates[index])
+                    clonedStates[index].states = {{id = id}}
+                    return clonedStates
+                end
+            )
+        end
 
--- Spawn Pet Button
-local SpawnBtn = Instance.new("TextButton")
-SpawnBtn.Size = UDim2.new(0.9, 0, 0, 40)
-SpawnBtn.Position = UDim2.new(0.05, 0, 0, 140)
-SpawnBtn.BackgroundColor3 = Color3.fromRGB(80, 120, 255)
-SpawnBtn.Text = "Spawn Pet"
-SpawnBtn.TextColor3 = Color3.fromRGB(255,255,255)
-SpawnBtn.Font = Enum.Font.SourceSansBold
-SpawnBtn.TextSize = 20
-SpawnBtn.Parent = MainFrame
+        local function attachPlayerToPet(pet)
+            local character = game.Players.LocalPlayer.Character
+            if not character or not character.PrimaryPart then
+                return false
+            end
+            local ridePosition = pet:FindFirstChild("RidePosition", true)
+            if not ridePosition then
+                return false
+            end
 
-local SpawnCorner = Instance.new("UICorner")
-SpawnCorner.CornerRadius = UDim.new(0,5)
-SpawnCorner.Parent = SpawnBtn
+            local sourceAttachment = Instance.new("Attachment")
+            sourceAttachment.Parent = ridePosition
+            sourceAttachment.Position = Vector3.new(0, 1.237, 0)
+            sourceAttachment.Name = "SourceAttachment"
 
--- Movable GUI logic
--- Draggable GUI logic
--- Draggable GUI logic (drag only using the Title)
--- Draggable GUI (Title only) + Hide mouse while dragging
-local UserInputService = game:GetService("UserInputService")
+            local stateConnection = Instance.new("RigidConstraint")
+            stateConnection.Name = "StateConnection"
+            stateConnection.Attachment0 = sourceAttachment
+            stateConnection.Attachment1 = character.PrimaryPart.RootAttachment
+            stateConnection.Parent = character
+            return true
+        end
 
-local dragging = false
-local dragStart
-local startPos
-local dragInput
+        local function clearPlayerState()
+            updateData(
+                "state_manager",
+                function(state)
+                    local clonedState = table.clone(state)
+                    clonedState.states = {}
+                    clonedState.is_sitting = false
+                    return clonedState
+                end
+            )
+        end
 
-local function update(input)
-	local delta = input.Position - dragStart
-	MainFrame.Position = UDim2.new(
-		0, startPos.X + delta.X,
-		0, startPos.Y + delta.Y
-	)
-end
+        local function setPlayerState(id)
+            updateData(
+                "state_manager",
+                function(state)
+                    local clonedState = table.clone(state)
+                    clonedState.states = {{id = id}}
+                    clonedState.is_sitting = true
+                    return clonedState
+                end
+            )
+        end
 
-Title.InputBegan:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1 then
-		dragging = true
-		dragStart = input.Position
-		startPos = Vector2.new(MainFrame.AbsolutePosition.X, MainFrame.AbsolutePosition.Y)
+        local function removePetState(uniqueId)
+            local pet = pets[uniqueId]
+            if not pet or not pet.model then
+                return
+            end
+            updateData(
+                "pet_state_managers",
+                function(petStates)
+                    local index =
+                        findIndex(
+                        petStates,
+                        function(state)
+                            return state.char == pet.model
+                        end
+                    )
+                    if not index then
+                        return petStates
+                    end
+                    table.remove(petStates, index)
+                    return petStates
+                end
+            )
+        end
 
-		-- Hide mouse
-		UserInputService.MouseIconEnabled = false
+        local function unmount(uniqueId)
+            local pet = pets[uniqueId]
+            if not pet or not pet.model then
+                return
+            end
+            if currentMountTrack then
+                currentMountTrack:Stop()
+                currentMountTrack:Destroy()
+            end
+            local sourceAttachment = pet.model:FindFirstChild("SourceAttachment", true)
+            if sourceAttachment then
+                sourceAttachment:Destroy()
+            end
+            if game.Players.LocalPlayer.Character then
+                for _, d in pairs(game.Players.LocalPlayer.Character:GetDescendants()) do
+                    if d:IsA("BasePart") and d:GetAttribute("HaveMass") then
+                        d.Massless = false
+                    end
+                end
+            end
+            clearPetState(uniqueId)
+            clearPlayerState()
+            pet.model:ScaleTo(1)
+            mountedPet = nil
+        end
 
-		-- Stop dragging when mouse released
-		input.Changed:Connect(function()
-			if input.UserInputState == Enum.UserInputState.End then
-				dragging = false
-				UserInputService.MouseIconEnabled = true -- show mouse again
-			end
-		end)
-	end
-end)
+        local function mount(uniqueId, playerState, petState)
+            local pet = pets[uniqueId]
+            if not pet or not pet.model then
+                return
+            end
+            local player = game.Players.LocalPlayer
+            if not player.Character or not player.Character.PrimaryPart then
+                return
+            end
+            mountedPet = uniqueId
+            setPetState(uniqueId, petState)
+            setPlayerState(playerState)
+            pet.model:ScaleTo(2)
+            attachPlayerToPet(pet.model)
+            currentMountTrack =
+                player.Character.Humanoid.Animator:LoadAnimation(animationManager.get_track("PlayerRidingPet"))
+            player.Character.Humanoid.Sit = true
+            for _, d in pairs(player.Character:GetDescendants()) do
+                if d:IsA("BasePart") and d.Massless == false then
+                    d.Massless = true
+                    d:SetAttribute("HaveMass", true)
+                end
+            end
+            currentMountTrack:Play()
+        end
 
-Title.InputChanged:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseMovement then
-		dragInput = input
-	end
-end)
+        local function fly(uniqueId)
+            mount(uniqueId, "PlayerFlyingPet", "PetBeingFlown")
+        end
+        local function ride(uniqueId)
+            mount(uniqueId, "PlayerRidingPet", "PetBeingRidden")
+        end
 
-UserInputService.InputChanged:Connect(function(input)
-	if dragging and input == dragInput then
-		update(input)
-	end
-end)
+        local function unequip(item)
+            local pet = pets[item.unique]
+            if not pet or not pet.model then
+                return
+            end
+            unmount(item.unique)
+            removePetWrapper(item.unique)
+            removePetState(item.unique)
+            pet.model:Destroy()
+            pet.model = nil
+            equippedPet = nil
+        end
 
--- Rarity selection logic
-local selectedRarity = "MFR"
+        local function equip(item)
+            if equippedPet then
+                unequip(equippedPet)
+            end
+            local petModel = getPetModel(item.kind):Clone()
+            petModel.Parent = workspace
+            pets[item.unique].model = petModel
+            if item.properties.neon or item.properties.mega_neon then
+                neonify(petModel, items[item.kind])
+            end
+            equippedPet = item
+            addPetWrapper(
+                {
+                    char = petModel,
+                    mega_neon = item.properties.mega_neon,
+                    neon = item.properties.neon,
+                    player = game.Players.LocalPlayer,
+                    entity_controller = game.Players.LocalPlayer,
+                    controller = game.Players.LocalPlayer,
+                    rp_name = item.properties.rp_name or "",
+                    pet_trick_level = item.properties.pet_trick_level,
+                    pet_unique = item.unique,
+                    pet_id = item.id,
+                    location = {
+                        full_destination_id = "housing",
+                        destination_id = "housing",
+                        house_owner = game.Players.LocalPlayer
+                    },
+                    pet_progression = {
+                        friendship_level = item.properties.friendship_level,
+                        age = item.properties.age,
+                        percentage = 0
+                    },
+                    are_colors_sealed = false,
+                    is_pet = true
+                }
+            )
+            addPetState(
+                {
+                    char = petModel,
+                    player = game.Players.LocalPlayer,
+                    store_key = "pet_state_managers",
+                    is_sitting = false,
+                    chars_connected_to_me = {},
+                    states = {}
+                }
+            )
+        end
 
-local function selectRarity(rarity)
-	selectedRarity = rarity
-	MFRBtn.BackgroundColor3 = (rarity == "MFR" and Color3.fromRGB(255,100,100)) or Color3.fromRGB(60,60,60)
-	NFRBtn.BackgroundColor3 = (rarity == "NFR" and Color3.fromRGB(100,255,100)) or Color3.fromRGB(60,60,60)
-	FRBtn.BackgroundColor3 = (rarity == "FR" and Color3.fromRGB(100,100,255)) or Color3.fromRGB(60,60,60)
-end
+        local oldGet = router.get
+        local function createRemoteFunctionMock(callback)
+            return {
+                InvokeServer = function(_, ...)
+                    return callback(...)
+                end
+            }
+        end
+        local function createRemoteEventMock(callback)
+            return {
+                FireServer = function(_, ...)
+                    return callback(...)
+                end
+            }
+        end
 
-MFRBtn.MouseButton1Click:Connect(function() selectRarity("MFR") end)
-NFRBtn.MouseButton1Click:Connect(function() selectRarity("NFR") end)
-FRBtn.MouseButton1Click:Connect(function() selectRarity("FR") end)
+        local equipRemote =
+            createRemoteFunctionMock(
+            function(uniqueId, metadata)
+                local pet = pets[uniqueId]
+                if not pet then
+                    return
+                end
+                equip(pet.data)
+                return true, {action = "equip", is_server = true}
+            end
+        )
+        local unequipRemote =
+            createRemoteFunctionMock(
+            function(uniqueId)
+                local pet = pets[uniqueId]
+                if not pet then
+                    return
+                end
+                unequip(pet.data)
+                return true, {action = "unequip", is_server = true}
+            end
+        )
+        local rideRemote =
+            createRemoteFunctionMock(
+            function(item)
+                ride(item.pet_unique)
+            end
+        )
+        local flyRemote =
+            createRemoteFunctionMock(
+            function(item)
+                fly(item.pet_unique)
+            end
+        )
+        local unmountRemoteFunction =
+            createRemoteFunctionMock(
+            function()
+                unmount(mountedPet)
+            end
+        )
+        local unmountRemoteEvent =
+            createRemoteEventMock(
+            function()
+                unmount(mountedPet)
+            end
+        )
 
--- Spawn pet logic (replace with your own spawning code)
-SpawnBtn.MouseButton1Click:Connect(function()
-	local petName = PetNameBox.Text
-	if petName ~= "" then
-		print("Spawning pet:", petName, "with rarity:", selectedRarity)
-		-- Example: fire a remote event to server to give pet
-		-- game.ReplicatedStorage.SpawnPet:FireServer(petName, selectedRarity)
-	end
-end)
+        router.get = function(name)
+            if name == "ToolAPI/Equip" then
+                return equipRemote
+            end
+            if name == "ToolAPI/Unequip" then
+                return unequipRemote
+            end
+            if name == "AdoptAPI/RidePet" then
+                return rideRemote
+            end
+            if name == "AdoptAPI/FlyPet" then
+                return flyRemote
+            end
+            if name == "AdoptAPI/ExitSeatStatesYield" then
+                return unmountRemoteFunction
+            end
+            if name == "AdoptAPI/ExitSeatStates" then
+                return unmountRemoteEvent
+            end
+            return oldGet(name)
+        end
 
--- Table to store player pets (client-side only)
-local PlayerPets = {}
+        for _, charWrapper in pairs(clientData.get("pet_char_wrappers")) do
+            oldGet("ToolAPI/Unequip"):InvokeServer(charWrapper.pet_unique)
+        end
 
--- Backpack UI inside LocalScript
--- Parent it to PlayerGui automatically
-local BackpackGui = Instance.new("Frame")
-BackpackGui.Size = UDim2.new(0, 300, 0, 250)
-BackpackGui.Position = UDim2.new(1, -310, 0.5, -125)
-BackpackGui.BackgroundColor3 = Color3.fromRGB(20,20,20)
-BackpackGui.BackgroundTransparency = 0.1
-BackpackGui.BorderSizePixel = 0
-BackpackGui.AnchorPoint = Vector2.new(0,0.5)
-BackpackGui.Visible = true
-BackpackGui.Parent = Player:WaitForChild("PlayerGui")
+        local Loads = require(game.ReplicatedStorage.Fsys).load
+        local InventoryDB = Loads("InventoryDB")
 
-local BackpackTitle = Instance.new("TextLabel")
-BackpackTitle.Size = UDim2.new(1,0,0,30)
-BackpackTitle.BackgroundTransparency = 1
-BackpackTitle.Text = "Pet Backpack"
-BackpackTitle.TextColor3 = Color3.fromRGB(255,255,255)
-BackpackTitle.Font = Enum.Font.SourceSansBold
-BackpackTitle.TextSize = 18
-BackpackTitle.Parent = BackpackGui
+        function GetPetByName(name)
+            for i, v in pairs(InventoryDB.pets) do
+                if v.name:lower() == name:lower() then
+                    return v.id
+                end
+            end
+            return false
+        end
 
--- Scrollable area for pet cards
-local PetList = Instance.new("ScrollingFrame")
-PetList.Size = UDim2.new(1, -10, 1, -40)
-PetList.Position = UDim2.new(0, 5, 0, 35)
-PetList.BackgroundTransparency = 1
-PetList.BorderSizePixel = 0
-PetList.CanvasSize = UDim2.new(0,0,0,0)
-PetList.ScrollBarThickness = 6
-PetList.Parent = BackpackGui
+        local WindUI =
+            loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 
-local UIListLayout = Instance.new("UIListLayout")
-UIListLayout.SortOrder = Enum.SortOrder.LayoutOrder
-UIListLayout.Padding = UDim.new(0,5)
-UIListLayout.Parent = PetList
+        WindUI:Popup(
+            {
+                Title = "No Risk Hub",
+                Icon = "cuboid",
+                IconThemed = true,
+                Content = "hello this is adopt me spawner enjoy using it",
+                Buttons = {
+                    {
+                        Title = "Cancel",
+                        Callback = function()
+                        end,
+                        Variant = "Secondary"
+                    },
+                    {
+                        Title = "Continue",
+                        Icon = "arrow-right",
+                        Callback = function()
+                            Confirmed = true
+                        end,
+                        Variant = "Primary"
+                    }
+                }
+            }
+        )
 
--- Function to create a pet card
-local function CreatePetCard(petName, rarity)
-	local card = Instance.new("Frame")
-	card.Size = UDim2.new(1,0,0,50)
-	card.BackgroundColor3 = Color3.fromRGB(40,40,40)
-	card.BorderSizePixel = 0
-	card.Parent = PetList
+        repeat
+            wait()
+        until Confirmed
 
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0,5)
-	corner.Parent = card
+        local Window =
+            WindUI:CreateWindow(
+            {
+                Title = "No Risk Hub",
+                Icon = "laptop",
+                Author = "by Ticarto",
+                Folder = "ChunkHubmm2",
+                Size = UDim2.fromOffset(420, 350),
+                Transparent = false,
+                Theme = "Dark",
+                User = {
+                    Enabled = true,
+                    Callback = function()
+                    end,
+                    Anonymous = false
+                },
+                SideBarWidth = 150,
+                ScrollBarEnabled = true
+            }
+        )
 
-	-- Pet name label
-	local nameLabel = Instance.new("TextLabel")
-	nameLabel.Size = UDim2.new(0.6,0,1,0)
-	nameLabel.BackgroundTransparency = 1
-	nameLabel.Text = petName
-	nameLabel.TextColor3 = Color3.fromRGB(255,255,255)
-	nameLabel.Font = Enum.Font.SourceSansBold
-	nameLabel.TextSize = 16
-	nameLabel.TextXAlignment = Enum.TextXAlignment.Left
-	nameLabel.Position = UDim2.new(0.05,0,0,0)
-	nameLabel.Parent = card
+        Window:EditOpenButton(
+            {
+                Title = "open no risk hub",
+                Icon = "rbxassetid://4483345998",
+                CornerRadius = UDim.new(0, 16),
+                StrokeThickness = 2,
+                Color = ColorSequence.new(Color3.fromHex("5787d2"), Color3.fromHex("ffffff")),
+                OnlyMobile = false,
+                Enabled = true,
+                Draggable = true
+            }
+        )
 
-	-- Rarity label
-	local rarityLabel = Instance.new("TextLabel")
-	rarityLabel.Size = UDim2.new(0.2,0,1,0)
-	rarityLabel.BackgroundTransparency = 1
-	rarityLabel.Text = rarity
-	rarityLabel.TextColor3 = Color3.fromRGB(255,255,0)
-	rarityLabel.Font = Enum.Font.SourceSansBold
-	rarityLabel.TextSize = 16
-	rarityLabel.Parent = card
-	rarityLabel.Position = UDim2.new(0.7,0,0,0)
+        Window:SetToggleKey(Enum.KeyCode.K)
 
-	-- Favorite star
-	local fav = Instance.new("TextButton")
-	fav.Size = UDim2.new(0.1,0,1,0)
-	fav.Position = UDim2.new(0.9,0,0,0)
-	fav.BackgroundTransparency = 1
-	fav.Text = "☆"
-	fav.TextColor3 = Color3.fromRGB(255,255,0)
-	fav.Font = Enum.Font.SourceSansBold
-	fav.TextSize = 20
-	fav.Parent = card
+        local PetsTab =
+            Window:Tab(
+            {
+                Title = "Pets",
+                Icon = "heart",
+                Desc = "Spawn pets"
+            }
+        )
 
-	local isFavorite = false
-	fav.MouseButton1Click:Connect(function()
-		isFavorite = not isFavorite
-		fav.Text = isFavorite and "★" or "☆"
-		-- Optional: Move favorite pets to top
-		if isFavorite then
-			card.LayoutOrder = 0
-		else
-			card.LayoutOrder = #PlayerPets
-		end
-	end)
+        local DiscordTab =
+            Window:Tab(
+            {
+                Title = "Discord",
+                Icon = "users",
+                Desc = "Copy our Discord invite"
+            }
+        )
 
-	-- Equip visual effect (outline glow)
-	card.MouseButton1Click:Connect(function()
-		-- Remove glow from all others
-		for _, p in pairs(PlayerPets) do
-			if p.Card then
-				p.Card.BackgroundColor3 = Color3.fromRGB(40,40,40)
-			end
-		end
-		card.BackgroundColor3 = Color3.fromRGB(70,70,70) -- selected pet highlight
-	end)
+        local petName = nil
+        local petType = "FR"
 
-	-- Save card reference
-	table.insert(PlayerPets, {Name=petName, Rarity=rarity, Card=card})
+        DiscordTab:Paragraph(
+            {
+                Title = "Join our Discord!",
+                Desc = "Click the button below to copy the invite link",
+                Image = "users",
+                Color = "Blue"
+            }
+        )
 
-	-- Update CanvasSize for scrolling
-	PetList.CanvasSize = UDim2.new(0,0,0,UIListLayout.AbsoluteContentSize.Y)
-end
+        DiscordTab:Button(
+            {
+                Title = "Copy Invite",
+                Icon = "users",
+                Callback = function()
+                    task.spawn(
+                        function()
+                            setclipboard("https://discord.gg/ddAQVRkpQm")
+                            warn("Discord invite copied to clipboard!")
+                        end
+                    )
+                end
+            }
+        )
 
--- Hook into Spawn Button
-SpawnBtn.MouseButton1Click:Connect(function()
-	local petName = PetNameBox.Text
-	if petName ~= "" then
-		CreatePetCard(petName, selectedRarity)
-		PetNameBox.Text = ""
-	end
-end)
+        PetsTab:Paragraph(
+            {
+                Title = "Pet Spawner",
+                Desc = "Enter the pet name and choose pet type before spawning",
+                Image = "heart",
+                Color = "Blue"
+            }
+        )
+
+        PetsTab:Input(
+            {
+                Title = "Pet Name",
+                Value = "",
+                InputIcon = "search",
+                Placeholder = "Enter pet name",
+                Callback = function(input)
+                    task.spawn(
+                        function()
+                            petName = input
+                            warn("Pet name set to:", petName)
+                        end
+                    )
+                end
+            }
+        )
+
+        PetsTab:Dropdown(
+            {
+                Title = "Type",
+                Values = {"FR", "NFR", "MFR"},
+                Multi = false,
+                Default = "FR",
+                Callback = function(value)
+                    task.spawn(
+                        function()
+                            petType = value
+                            warn("Pet type set to:", petType)
+                        end
+                    )
+                end
+            }
+        )
+
+        PetsTab:Button(
+            {
+                Title = "Spawn Pet",
+                Icon = "sparkles",
+                Callback = function()
+                    task.spawn(
+                        function()
+                            if not petName or petName == "" then
+                                warn("Please enter a pet name!")
+                                return
+                            end
+                            local petId = GetPetByName(petName)
+                            if not petId then
+                                warn("Pet not found!")
+                                WindUI:Notify(
+                                    {
+                                        Title = "Error",
+                                        Content = "Pet Not Found Please Try Again",
+                                        Icon = "shield-alert",
+                                        Duration = 2
+                                    }
+                                )
+                                return
+                            end
+                            if petType == "FR" then
+                                createPet(
+                                    petId,
+                                    {
+                                        pet_trick_level = 0,
+                                        rideable = true,
+                                        flyable = true,
+                                        friendship_level = 0,
+                                        age = 1,
+                                        ailments_completed = 0,
+                                        rp_name = ""
+                                    }
+                                )
+                            elseif petType == "NFR" then
+                                createPet(
+                                    petId,
+                                    {
+                                        pet_trick_level = 0,
+                                        neon = true,
+                                        rideable = true,
+                                        flyable = true,
+                                        friendship_level = 0,
+                                        age = 1,
+                                        ailments_completed = 0,
+                                        rp_name = ""
+                                    }
+                                )
+                            elseif petType == "MFR" then
+                                createPet(
+                                    petId,
+                                    {
+                                        pet_trick_level = 0,
+                                        mega_neon = true,
+                                        rideable = true,
+                                        flyable = true,
+                                        friendship_level = 0,
+                                        age = 1,
+                                        ailments_completed = 0,
+                                        rp_name = ""
+                                    }
+                                )
+                            end
+                        end
+                    )
+                    WindUI:Notify(
+                        {
+                            Title = "Spawning Item",
+                            Content = "Starting spawn Pet " .. petName .. " " .. petType,
+                            Icon = "loader",
+                            Duration = 2
+                        }
+                    )
+                end
+            }
+        )
+    end
+)
